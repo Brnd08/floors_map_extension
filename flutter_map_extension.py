@@ -1132,7 +1132,7 @@ class FlutterMapExtension(inkex.EffectExtension):
         # get selected objects in selection order
         selected_objects: List = list(selected_elements)
 
-        if len(selected_objects) < 2:
+        if len(selected_objects) < 1:
             raise inkex.AbortExtension( f"Not enough objects selected. Need at least 2, got {len(selected_objects)}.")
 
         use_reverse_sorting = (sort_direction == 'desc')
