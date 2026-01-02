@@ -11,13 +11,6 @@
         <option value="add_building">ADD buildings connections</option>
       </param>
       <spacer/> <spacer/>
-      <param name="copy_transform" type="optiongroup" appearance="radio" gui-text="Copy tranform:" gui-hidden="operation_mode == 'clean'">
-        <option value="no_copy" >Don't copy transform</option>
-        <option value="copy_from_a">Copy point A transform</option>
-        <option value="copy_from_b">Copy point B transform</option>
-        <option value="copy_from_both">Copy transform from both</option>
-      </param>
-      <spacer/> <spacer/>
       <param name="clean_lines" type="bool" gui-text="Delete Lines pointing to non-existent points" gui-hidden="operation_mode == 'connect'">true</param>
     </page>
     <page name="Options" gui-text="Connection Options">
@@ -47,6 +40,15 @@
                 <option value="desc">Descending</option>
               </param>
             </hbox>
+            <spacer/> <spacer/>
+            <separator/>
+            <label appearance="header">Other options</label>
+            <param name="copy_transform" type="optiongroup" appearance="radio" gui-text="Copy tranform:" gui-hidden="operation_mode == 'clean'">
+              <option value="no_copy" >Don't copy transform</option>
+              <option value="copy_from_a">Copy point A transform</option>
+              <option value="copy_from_b">Copy point B transform</option>
+              <option value="copy_from_both">Copy transform from both</option>
+            </param>
         </vbox>
         <separator/> <separator/> <separator/> <separator/>
         <vbox>
@@ -60,7 +62,7 @@
             <spacer/> <spacer/>
             <separator/>
             <label appearance="header" indent="1">Nearest point connection options</label>
-            <param name="ignore_building_point" type="bool" gui-text="Whether to ignore points that are building-points/entrance-to-buildings" indent="2">true</param>
+            <param name="ignore_building_point" type="bool" guid-description="Whether to ignore points that are building-points/entrance-to-buildings" gui-text="Ignore building points" indent="2">true</param>
             <param name="max_radius" type="string" gui-text="Max connection distance (radius)" gui-description="maximun connection distance measured as search radius from the center of each point" indent="2">0.1px</param>
 
         </vbox>
