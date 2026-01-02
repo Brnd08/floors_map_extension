@@ -22,8 +22,10 @@ Description of this extension
 """
 
 import logging
-from typing import Any, Dict, List, Union
-import inkex
+import math
+from typing import Any, Dict, List, Tuple, Union
+import inkex 
+from inkex.units import convert_unit
 import re
 from inkex.utils import debug as alert
 import inkex.elements._polygons as polygons
@@ -152,7 +154,6 @@ class FlutterMapExtension(inkex.EffectExtension):
             if (stroke_width_value is None) or (stroke_width_unit is None):
                 raise inkex.AbortExtension(f'invalid units value provided for stroke width: "{options.line_stroke_width}"')
 
-            from inkex.units import convert_unit
 
             sort_mode = cls.SortMode.get(options.sort_mode)
             assert sort_mode, f'invalid sort_mode value provided: {options.sort_mode}. Valid values: {[e.value for e in cls.SortMode]}'
@@ -483,8 +484,6 @@ class FlutterMapExtension(inkex.EffectExtension):
         pars.add_argument("--ignore_building_point", type=inkex.Boolean, default=True)
         pars.add_argument("--max_radius", type=str, default="0.1px")
 
-    
-
     def effect(self):
         """ Main entry point of the extension """
         # Determine operation mode
@@ -495,10 +494,12 @@ class FlutterMapExtension(inkex.EffectExtension):
                 smart_connect_type = self.SmartConnectTypes.get(self.options.smart_connect_type)
                 assert smart_connect_type is not None, f'Invalid smart connect type: {self.options.smart_connect_type}'
 
+                
                 self.smart_connect_points(
                     smart_connect_type= smart_connect_type,
+                    connection_options= FlutterMapExtension.PointConnectionOptions.from_extension_options(self.options),
                     ignore_building_point= self.options.ignore_building_point,
-                    max_radius= self.options.max_radius,
+                    max_radius= self.options.max_radius
                 )
             else: 
                 self.sequentially_connect_points(
@@ -596,28 +597,10 @@ class FlutterMapExtension(inkex.EffectExtension):
             # extract unique entrance IDs from document buildings (we asume each element matches the regex)
             self.unique_entrances_ids = [self.BUILDING_ID_REGEX.match(e).group(4) for e in self.document_buildings] # pyright: ignore[reportOptionalMemberAccess]
         
-        if point_id in self.unique_entrances_ids:
+        if str(point_id) in self.unique_entrances_ids:
             return True
 
         return False
-
-        
-        
-
-
-    def smart_connect_points(self, smart_connect_type: SmartConnectTypes, **connection_params):
-        """ Smart connect points using specified algorithm """
-        def smart_connect_nearest_point(ignore_building_point: bool = True, max_radius: str ="0.1px"):
-            """ Connect points to the nearest point within a specified radius """
-            pass
-        
-        # TODO: Validate and process inputs
-
-        if smart_connect_type == self.SmartConnectTypes.NEAREST_POINT:
-            smart_connect_nearest_point(**connection_params)
-        else:
-            raise NotImplementedError(f'Smart connect type not implemented: {smart_connect_type}')
-
 
     from dataclasses import dataclass
     @dataclass
@@ -636,6 +619,111 @@ class FlutterMapExtension(inkex.EffectExtension):
         subtype: Union[str, None]
         neighbours: Union[List[int], List[str]]
         entrance_element: Union[inkex.elements.BaseElement, None]
+
+    def smart_connect_nearest_point(self, points_to_connect: List[inkex.elements.BaseElement], 
+                                    ignore_building_point: bool = True, max_radius: str ="0.1px") -> List[List[inkex.elements.BaseElement]]:
+        """ 
+        Builds and returns a list of pairs of PointsInfo, each pair indicates a connection that will be made. 
+        This method only returns the pairs of points to connect, connect is not performed by this function. 
+
+        Output might contain duplicated connections (A to B and B to A)
+
+        receives a list of elements filtered by ellipses / circles 
+        allows to specify whether to connect to building points 
+        requires a max search radius
+        """
+        # validate inputs 
+        max_radius_value, max_radius_unit = FlutterMapExtension.extract_unit_from_text_expression(max_radius)
+        assert max_radius_unit and max_radius_value, f'Invalid max radio string repreesentation: {self.options.max_radius}'
+        from inkex.units import convert_unit
+        max_dist = convert_unit(max_radius_value, max_radius_unit)
+
+        # lambda used to calculate euclidean distance between the points center
+        calculate_distance_between_elements = lambda el1, el2: math.sqrt(
+            (el1.bounding_box().x.center - el2.bounding_box().x.center)**2 + 
+            (el1.bounding_box().y.center - el2.bounding_box().y.center)**2
+        )
+
+        sequences_of_points_to_connect: List[List[inkex.elements.BaseElement]] = []
+
+        # exclude the points linked to buildings from the points available to connect
+        available_points_to_connect = [p for p in points_to_connect if not self.is_building_point(p)] if ignore_building_point else points_to_connect
+
+        # Iterate over each point to connect and add it to the list of pairs to connect along with the nearest point (if any)
+        for point in (points_to_connect):
+            nearest_point = None
+            minimum_distance = max_dist
+
+            # find the nearest point
+            for candidate_point in available_points_to_connect:
+                if point.get('id') == candidate_point.get('id'): continue
+                
+                dist = calculate_distance_between_elements(point, candidate_point)
+                if dist < minimum_distance:
+                    minimum_distance = dist
+                    nearest_point = candidate_point
+            
+            if nearest_point is not None:
+                # if we got a nearest node then we add that pair to list
+                sequences_of_points_to_connect.append([point, nearest_point])
+        
+        return sequences_of_points_to_connect
+
+
+    def smart_connect_points(self, smart_connect_type: SmartConnectTypes, connection_options: PointConnectionOptions = PointConnectionOptions(), **connection_params):
+        """ Smart connect points using specified algorithm """
+        # Validate and filter inputs: At least two ellipses / circles to connect
+        selected_elements: selected.ElementList = self.svg.selected
+        if not selected_elements or len(selected_elements) <= 0:
+            raise inkex.AbortExtension("No selection: Need to select at least 2 objects")
+
+        # NOTE: selected_elements holds the elements in the user selection order
+        selected_ellipses: List = list(selected_elements.filter(polygons.Ellipse)) + list(selected_elements.filter(polygons.Circle))
+
+        if len(selected_ellipses) < 2:
+            raise inkex.AbortExtension( f"Not enough ellipses selected. Need at least 2, got {len(selected_ellipses)}.")
+
+        # List that contains the svg elements that will be connected
+        # each algorithm will result in a differents set of pairs of points to connect
+        raw_pairs_of_points_to_connect : List[List[inkex.elements.BaseElement]]
+        if smart_connect_type == self.SmartConnectTypes.NEAREST_POINT:
+            # Will connect each point to the nearest point
+            raw_pairs_of_points_to_connect = self.smart_connect_nearest_point(points_to_connect=selected_ellipses, **connection_params)
+        else:
+            raise NotImplementedError(f'Smart connect type not implemented: {smart_connect_type}')
+        
+
+        # Input Normalization: extract and group required information for connection operation, 
+        # find max existing model point id across the whole document to assign new IDs
+        max_id_number = self.get_max_existing_object_id(self.svg.get_ids(), self.get_point_id_number)
+
+        # List that will be used to call the sequential point connection function 
+        pairs_of_points_to_connect: List[List[FlutterMapExtension.PointInfo]] = []
+        current_pair = 0
+        # Convert the pair of svg elements to pairs of PointInfo objects
+        for pair_list in raw_pairs_of_points_to_connect: 
+            pairs_of_points_to_connect.append([])
+            for element in pair_list:
+                id_attr = element.get('id')
+
+                # attempt to extract an already assigned model point id
+                element_id, neighbors = self.parse_point_id(id_attr)
+
+                # Assign a new model point id if not already present
+                if element_id is None:
+                    max_id_number = self.get_next_object_id(max_id_number)
+                    element_id = max_id_number 
+
+                pairs_of_points_to_connect[current_pair].append(self.PointInfo(el= element, id= str(element_id), neighbours= neighbors))
+            current_pair += 1
+
+        # Finally connect the points based on the pair of points determined by the algorithm
+        for pair_of_points_to_connect in pairs_of_points_to_connect: 
+            # update neighbours in case the id got modified in other entry (recalculate based on id)
+            pair_of_points_to_connect[0].neighbours = (self.parse_point_id(pair_of_points_to_connect[0].el.get('id')))[1]
+            pair_of_points_to_connect[1].neighbours = (self.parse_point_id(pair_of_points_to_connect[1].el.get('id')))[1]
+            self.connect_using_point_info(elements_info=pair_of_points_to_connect, connection_options=connection_options)
+
 
     @staticmethod
     def add_neighbour(element_info: Union[PointInfo, BuildingInfo], neighbour_id: str):  
@@ -670,17 +758,24 @@ class FlutterMapExtension(inkex.EffectExtension):
             B = elements_info[i + 1]
 
             # include each other as neighbors (linking)
-            self.add_neighbour(A, B.id)
-            self.add_neighbour(B, A.id)
+            self.add_neighbour(A, str(B.id))
+            self.add_neighbour(B, str(A.id))
             
             # Update element id attribute
-            for info in (A, B):
+            for info in [A, B]:
                 neighbors = info.neighbours
                 id_val = self.build_point_id_attr(info.id, neighbors)
                 info.el.set('id', id_val)
 
             # set z-order 1 level below points z-order
             if connection_options.draw_lines: 
+
+                # do not draw line if the line for this connection already exists
+                existing_lines = self.svg.xpath(f'//*[@id="nav_line-{str(A.id)}-{str(B.id)}" or @id="nav_line-{str(B.id)}-{str(A.id)}"]')
+                if len(existing_lines) > 0:
+                    self.msg(f'\n=> A line representing the connection between "{f"point-{A.id}"}" and "{f"point-{B.id}"}" already exists: {[e.get("id") for e in existing_lines]},' 
+                             ' line drawing will be skipped. You can delete such line and connect again both points if you would like the extension to draw a new line')
+                    continue
 
                 # read coordinates from cx/cy (strip units)
                 ax = (A.el.get('cx'))
