@@ -519,7 +519,6 @@ class FlutterMapExtension(inkex.EffectExtension):
             final_point_radius = convert_unit(entrance_radius_value, entrance_radius_units)
 
             self.add_building(
-                connection_line_options= FlutterMapExtension.PointConnectionOptions.from_extension_options(self.options),
                 building_options= FlutterMapExtension.BuildingOptions.from_extension_options(self.options),
                 entrance_point_options= FlutterMapExtension.EntrancePointOptions.from_extension_options(self.options),
                 sort_mode= self.options.sort_mode,
@@ -622,18 +621,23 @@ class FlutterMapExtension(inkex.EffectExtension):
 
     from dataclasses import dataclass
     @dataclass
-    class ElementInfo:
+    class PointInfo:
+        """ DTO class used to wrap a point's svg element and required info for connection operations """
         el: inkex.elements.BaseElement
         id: str
         neighbors: Union[List[int], List[str]]
+    
+    @dataclass
+    class BuildingInfo:
+        """ DTO class used to wrap a building's svg element and required info for connection operations """
+        el: inkex.elements.BaseElement
+        id: str
+        type: str
+        subtype: Union[str, None]
+        entrance_ids: Union[List[int], List[str]]
+        entrance_element: Union[inkex.elements.BaseElement, None]
 
     def connect_points(self, connection_options: PointConnectionOptions = PointConnectionOptions()):
-        # TODO: Refactor to use LineConnectionOptions
-        # draw_lines=connection_options.draw_lines
-        # line_color=connection_options.line_color
-        # lines_stroke=connection_options.lines_stroke
-        # copy_transform=connection_options.copy_transform
-        
         # Input Validation: at least 2 selected elements
         selected_elements: selected.ElementList = self.svg.selected
         if not selected_elements or len(selected_elements) <= 0:
@@ -655,14 +659,10 @@ class FlutterMapExtension(inkex.EffectExtension):
         elif connection_options.sort_mode == self.PointConnectionOptions.SortMode.Y_AXIS: 
             selected_ellipses.sort(key=lambda e: e.bounding_box().center[1], reverse=use_reverse_sorting)
 
-
-
-
-
         # Input Normalization: extract and group required information for connection operation
 
         # create list with entries containing: the element, numeric id & neighbours
-        elements_info: List[FlutterMapExtension.ElementInfo] = []
+        elements_info: List[FlutterMapExtension.PointInfo] = []
 
         # find max existing model point id across the whole document to assign new IDs
         max_id_number = self.get_max_existing_object_id(self.svg.get_ids(), self.get_point_id_number)
@@ -677,11 +677,11 @@ class FlutterMapExtension(inkex.EffectExtension):
             if element_id is None:
                 max_id_number = self.get_next_object_id(max_id_number)
                 element_id = max_id_number 
-            elements_info.append(self.ElementInfo(el= element, id= str(element_id), neighbors= neighbors))
+            elements_info.append(self.PointInfo(el= element, id= str(element_id), neighbors= neighbors))
             
 
         # helper to add point neighbours to an element-point (no duplicates, not the same point as neighbour)
-        def add_neighbour2(element_info: FlutterMapExtension.ElementInfo, neighbor_id: str):  
+        def add_neighbour(element_info: FlutterMapExtension.PointInfo, neighbor_id: str):  
             """ Takes an element infor dictionary and modifies the state of its contained element to add a new point neighbour"""
             if neighbor_id == element_info.id:
                 return
@@ -697,11 +697,10 @@ class FlutterMapExtension(inkex.EffectExtension):
 
             A = elements_info[i]
             B = elements_info[i + 1]
-            # alert(f'Linking {A=} and {B=}')
 
             # include each other as neighbors 
-            add_neighbour2(A, B.id)
-            add_neighbour2(B, A.id)
+            add_neighbour(A, B.id)
+            add_neighbour(B, A.id)
 
             # read coordinates from cx/cy (strip units)
             ax = (A.el.get('cx'))
@@ -930,8 +929,7 @@ class FlutterMapExtension(inkex.EffectExtension):
         return dx, dy
                    
 
-    def add_building(self, connection_line_options: PointConnectionOptions = PointConnectionOptions(), 
-                     building_options: BuildingOptions = BuildingOptions(), sort_mode: str ='no_sort', 
+    def add_building(self, building_options: BuildingOptions = BuildingOptions(), sort_mode: str ='no_sort', 
                      sort_direction: str ='asc', entrance_point_options: EntrancePointOptions = EntrancePointOptions()):
         """
         Adds a building element to the map at a specified location with given properties.
@@ -951,11 +949,9 @@ class FlutterMapExtension(inkex.EffectExtension):
         use_reverse_sorting = (sort_direction == 'desc')
         if sort_mode == 'sort_horizontally':
             selected_objects.sort(key=lambda e: e.bounding_box().center[0], reverse=use_reverse_sorting)
-            # self.msg(f'Sorted horizontally, {sort_direction=}')
 
         elif sort_mode == 'sort_vertically':
             selected_objects.sort(key=lambda e: e.bounding_box().center[1], reverse=use_reverse_sorting)
-            # self.msg(f'Sorted vertically, {sort_direction=}')
 
         # find max existing building-N index across the whole document to assign new IDs
         max_id_number = 0
@@ -972,7 +968,7 @@ class FlutterMapExtension(inkex.EffectExtension):
 
 
         # create list with entries containing: the element, numeric id & neighbours
-        elem_info = []
+        elem_info: List[FlutterMapExtension.BuildingInfo] = []
         for element in selected_objects:
             id_attr = element.get('id')
             # remove elements that are flutter-map points, if we find any likely means that some of the buildings are already linked to a point, we can later retrieve that 
@@ -997,8 +993,9 @@ class FlutterMapExtension(inkex.EffectExtension):
                 continue
 
             # if no entrances_ids, means this building has no connection point yet
-            elem_info.append({'el': element, 'type': building_type, 'subtype': building_subtype, 
-                              'id': str(building_id), 'entrances_ids': entrances_ids})
+
+            elem_info.append(self.BuildingInfo(el= element, type= building_type, subtype= building_subtype, 
+                              id= str(building_id), entrance_ids= entrances_ids, entrance_element=None))
         
 
 
@@ -1017,11 +1014,11 @@ class FlutterMapExtension(inkex.EffectExtension):
             # 4. create and draw the point / entrance svg element if required
             # 5. Finally, update the building & point elements id attributes (inkex does not automatically update them due to performance reasons)
 
-            building_element = building_info['el']
-            building_id = building_info['id']
-            building_subtype = building_info['subtype']
-            building_type = building_info['type']
-            entrances_ids = building_info['entrances_ids']
+            building_element = building_info.el
+            building_id = building_info.id
+            building_subtype = building_info.subtype
+            building_type = building_info.type
+            entrances_ids = building_info.entrance_ids
             
             should_create_entrance_point = building_options.add_connection_point
 
@@ -1110,22 +1107,8 @@ class FlutterMapExtension(inkex.EffectExtension):
                     building_options.custom_point_separation
                 )
                 from inkex import Transform
-
-                # # Apply transform to entrance element so it is displaced correctly
-                # if entrance_dx != 0 or entrance_dy != 0:
-
-                #     # Create a translation transform
-                #     displacement_transform = Transform().add_translate(entrance_dx, entrance_dy)
-                    
-                #     # Compose with existing transform if any
-                #     if entrance_element.transform:
-                #         # Using @= to compose transforms in-place
-                #         entrance_element.transform @= displacement_transform
-                #     else:
-                #         entrance_element.transform = displacement_transform
                             
-                # Set entrance point attributes
-                # entrance_element.set('id', next_point_id)
+                # Set entrance point metadata
                 entrance_element.set('flutter_maps:type', 'point')
                 entrance_element.set('flutter_maps:subtype', 'entrance')
                 entrance_element.set('flutter_maps:building_id', building_id)
@@ -1136,40 +1119,31 @@ class FlutterMapExtension(inkex.EffectExtension):
                 entrance_element.style['stroke'] = entrance_point_options.point_stroke_color
                 entrance_element.style['stroke-width'] = entrance_point_options.point_stroke
                 
-                # 3. Add entrance point to the building's entrances_ids
+                # Add entrance point to the building's neighbours
                 entrances_ids.append(next_point_id)
-                building_info['entrance_ids'] = entrances_ids
-                
-                    
-                # Also store the entrance element reference in building_info for later use
-                building_info['entrance_element'] = entrance_element
-                
+                building_info.entrance_ids = entrances_ids
+                                    
+                # store the entrance element for later use
+                building_info.entrance_element = entrance_element
                 self.msg(f'Created entrance point {next_point_id} for building {building_id} at ({entrance_x:.2f}, {entrance_y:.2f})')
             
-                # 5. Update building element's ID attribute with entrance relationships
-                # Build the complex ID string with neighbors and entrances
-                entrance_ids = building_info.get('entrance_ids', [])
-                
-                
+                # Update building element's ID attribute with entrance relationships
+                entrance_ids = building_info.entrance_ids
                 # Create the ID attribute string in format: 
                 building_id_val = self.build_building_id_attr(
                     building_type=building_type,
                     building_subtype=building_subtype,
-                    id=building_id,
-                    entrance_ids=entrance_ids
+                    id=int(building_id),
+                    entrance_ids=entrance_ids # type: ignore
                 )
 
-
-
-                # 4. Insert the entrance point into the SVG
-                # Typically insert at position 0 to keep it below other elements
-                # TODO: check if it is safe to remove this conditional 
+                # Insert the entrance point into the SVG
                 if should_create_entrance_point:
 
                     last_created_point_id_number = next_point_id
 
                     # Update the selected object id so that it is now a building with a linked point (entrance)
-                    building_info['el'].set('id', building_id_val)  
+                    building_info.el.set('id', building_id_val)  
 
                     entrance_element.set('inkscape:label', f'building_point:{building_id}')
 
@@ -1179,10 +1153,11 @@ class FlutterMapExtension(inkex.EffectExtension):
                         neighbors_list=[]
                     )
 
-                    building_info['entrance_element'].set('id', entrance_id_val)
+                    # entrance element will never be null (its created programatically)
+                    building_info.entrance_element.set('id', entrance_id_val) # type: ignore
 
                     # Check if there is a "points" layer in the document, otherwise create it
-                    # Then add the entrance point to that layer that we avoid any transform issues with the current layer
+                    # Then add the entrance point to that layer so we avoid any transform issues with the current layer
                     query = '//svg:g[@inkscape:groupmode="layer" and @inkscape:label="navigation"]'
                     layers_search_result = self.svg.xpath(query)
 
@@ -1198,27 +1173,13 @@ class FlutterMapExtension(inkex.EffectExtension):
                     # Even if it already existed elsewhere, this moves it to the end.
                     self.svg.append(points_layer)
 
-
-
-
-
-                    # Now we copy the final transform from the building so that the entrance point is aligned correctly
-                    # full_matrix = building_element.composed_transform()  # Get the full transformation matrix of the reference object
-
-                    # Extract ONLY the translation (x and y offset)
-                    # Translation is in e and f of the matrix. Reference: https://www.w3.org/TR/SVG11/coords.html#TransformMatrixDefined
-                    # translation_only = Transform(translate=(full_matrix.e, full_matrix.f)) # This ignores scaling, rotation, and shearing
-                    # translation_only = full_matrix # This ignores scaling, rotation, and shearing
-                    # entrance_element.transform @= translation_only # Apply the translation to the entrance point
-                    # Extract full context
-
-
-
+                    # We proceed to normalize the cordinates to obtain the final x and y poisitioning for the points layer 
+                    
                     # 1. Use the parent's composed transform (since bbox was in parent space)
                     # This prevents the "double-scaling"
                     parent_matrix = building_element.getparent().composed_transform()
 
-                    # 2. Use the exact point you calculated earlier (Position + Displacement)
+                    # 2. Use the exact points calculated earlier (Position + Displacement)
                     # We use Vector2d to ensure accurate point-wise math.
                     final_local_pt = inkex.Vector2d(entrance_x + entrance_dx, entrance_y + entrance_dy)
                     global_pos = parent_matrix.apply_to_point(final_local_pt)
@@ -1237,39 +1198,11 @@ class FlutterMapExtension(inkex.EffectExtension):
                     points_layer.add(entrance_element)
 
 
-
-
-                    # full_matrix = building_element.composed_transform()
-
-                    # # Determine global position of the building's reference point
-                    # # (e.g., the center of its bounding box)
-                    # ref_point = building_element.bounding_box().center
-                    # global_pos = full_matrix.apply_to_point(ref_point)
-
-                    # # Calculate the local coordinate for the entrance_element in its layer
-                    # # Accounting for the layer's own potential transforms
-                    # points_layer_transform = points_layer.composed_transform()
-                    # local_target = (-points_layer_transform).apply_to_point(global_pos)
-
-                    # # Set the entrance_element position
-                    # entrance_element.set('cx', str(local_target.x))
-                    # entrance_element.set('cy', str(local_target.y))
-
-
-
-
-                    # # add building entrance / point to the points layer
-                    # points_layer.add(entrance_element)
-
-         
-
 if __name__ == '__main__':
     try:
         import inkscape_ExtensionDevTools 
-        # alert('executed extension dev tools')
         inkscape_ExtensionDevTools.inkscape_run_debug()
     except Exception as e :
         alert(f'something happened when executing extension Dev Tools: {e}' )
-    
     
     FlutterMapExtension().run()
