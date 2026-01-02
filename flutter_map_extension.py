@@ -501,7 +501,7 @@ class FlutterMapExtension(inkex.EffectExtension):
                     max_radius= self.options.max_radius,
                 )
             else: 
-                self.connect_points(
+                self.sequentially_connect_points(
                     connection_options= FlutterMapExtension.PointConnectionOptions.from_extension_options(self.options),
                 )
         elif operation_mode == 'clean':
@@ -625,7 +625,7 @@ class FlutterMapExtension(inkex.EffectExtension):
         """ DTO class used to wrap a point's svg element and required info for connection operations """
         el: inkex.elements.BaseElement
         id: str
-        neighbors: Union[List[int], List[str]]
+        neighbours: Union[List[int], List[str]]
     
     @dataclass
     class BuildingInfo:
@@ -634,10 +634,115 @@ class FlutterMapExtension(inkex.EffectExtension):
         id: str
         type: str
         subtype: Union[str, None]
-        entrance_ids: Union[List[int], List[str]]
+        neighbours: Union[List[int], List[str]]
         entrance_element: Union[inkex.elements.BaseElement, None]
 
-    def connect_points(self, connection_options: PointConnectionOptions = PointConnectionOptions()):
+    @staticmethod
+    def add_neighbour(element_info: Union[PointInfo, BuildingInfo], neighbour_id: str):  
+        """ 
+        helper to add point neighbours to a existing navigation-point or building (no duplicates, not the same point as neighbour)
+        Takes an point info elements modifies the state of its contained element to add a new point neighbour
+        """
+        if neighbour_id == element_info.id:
+            return
+        if neighbour_id not in element_info.neighbours:
+            element_info.neighbours.append(neighbour_id) # type: ignore
+
+    def connect_using_point_info(self, elements_info: List[PointInfo], connection_options: PointConnectionOptions): 
+        """
+        Takes a List with PointInfo as elements, iterates over them and connects them in sequential order. 
+        Connection / Link is store in both elements id attribute
+
+        If the list has [A, B], then connects (A to B & B to A) 
+        If the list has [A, B, C], then connects (A to B, B to A) & (B to C, C to B)
+
+        This strategy is done until there are no more elements to process. 
+
+        Will draw a line representing the linked points if specified on the connection options.
+        """
+        # consecutively connect points (a - b - c - d ...)
+        for i in range(len(elements_info) - 1):
+            # end condition to avoid index error (no more points available to link)
+            if i + 1 >= len(elements_info):
+                alert(f'No more objects to link. {i=}')
+
+            A = elements_info[i]
+            B = elements_info[i + 1]
+
+            # include each other as neighbors (linking)
+            self.add_neighbour(A, B.id)
+            self.add_neighbour(B, A.id)
+            
+            # Update element id attribute
+            for info in (A, B):
+                neighbors = info.neighbours
+                id_val = self.build_point_id_attr(info.id, neighbors)
+                info.el.set('id', id_val)
+
+            # set z-order 1 level below points z-order
+            if connection_options.draw_lines: 
+
+                # read coordinates from cx/cy (strip units)
+                ax = (A.el.get('cx'))
+                ay = (A.el.get('cy'))
+                bx = (B.el.get('cx'))
+                by = (B.el.get('cy'))
+
+                # parse transforms (identity if missing)
+                t_a = inkex.Transform(A.el.get('transform') or '')
+                t_b = inkex.Transform(B.el.get('transform') or '')
+
+                # apply transforms according to option
+                copy_transform = connection_options.copy_transform
+                if copy_transform == 'copy_from_a':
+                    start = t_a.apply_to_point((ax, ay))
+                    end   = [bx, by]
+                elif copy_transform == 'copy_from_b':
+                    start = [ax, ay]
+                    end   = t_b.apply_to_point((bx, by))
+                elif copy_transform == 'copy_from_both':
+                    start = t_a.apply_to_point((ax, ay))
+                    end   = t_b.apply_to_point((bx, by))
+                else:  # no_copy
+                    start = [ax, ay]
+                    end   = [bx, by]
+
+                # create svg line element if indicated: 
+                line = polygons.PathElement.new(f"M {start[0]},{start[1]} L {end[0]},{end[1]}")
+
+                # Style line according to options
+                line.style['stroke'] = connection_options.line_color
+                line.style['stroke-width']= connection_options.lines_stroke
+                # Add metadata
+                line.set('flutter_maps:modified_by_code', 'inkscape_extension')
+                line.set('flutter_maps:a_id', str(A.id))
+                line.set('flutter_maps:b_id', str(B.id))
+                line.set('id', f'nav_line-{line.get("flutter_maps:a_id")}-{line.get("flutter_maps:b_id")}')
+
+                # DRAW THE LINE ON THE NAVIGATION LAYER
+
+                # Check if there is a "navigation" layer in the document, otherwise create it
+                query = '//svg:g[@inkscape:groupmode="layer" and @inkscape:label="navigation"]'
+                layers_search_result = self.svg.xpath(query)
+
+                if layers_search_result:
+                    points_layer = layers_search_result[0]
+                else:
+                    points_layer = inkex.Layer.new("navigation")
+                    self.svg.add(points_layer)
+
+                # MOVE the layer to the very bottom of the XML tree (Top Z-index)
+                # Even if it already existed elsewhere, this moves it to the end.
+                self.svg.append(points_layer)
+
+                # Add line to points layer (at the end, so on top of other svg objects but behind points)
+                points_layer.insert(0, line)
+
+    def sequentially_connect_points(self, connection_options: PointConnectionOptions = PointConnectionOptions()):
+        """
+        Sequentilally connects the selected ellipses/circles. 
+        Sorting based on Y / X axis is sopported (asc and desc direction)
+        """
         # Input Validation: at least 2 selected elements
         selected_elements: selected.ElementList = self.svg.selected
         if not selected_elements or len(selected_elements) <= 0:
@@ -677,97 +782,12 @@ class FlutterMapExtension(inkex.EffectExtension):
             if element_id is None:
                 max_id_number = self.get_next_object_id(max_id_number)
                 element_id = max_id_number 
-            elements_info.append(self.PointInfo(el= element, id= str(element_id), neighbors= neighbors))
+            elements_info.append(self.PointInfo(el= element, id= str(element_id), neighbours= neighbors))
             
-
-        # helper to add point neighbours to an element-point (no duplicates, not the same point as neighbour)
-        def add_neighbour(element_info: FlutterMapExtension.PointInfo, neighbor_id: str):  
-            """ Takes an element infor dictionary and modifies the state of its contained element to add a new point neighbour"""
-            if neighbor_id == element_info.id:
-                return
-            if neighbor_id not in element_info.neighbors:
-                element_info.neighbors.append(neighbor_id) # type: ignore
-
-
-        # connect consecutive pairs in selection order
-        for i in range(len(elements_info) - 1):
-            # end condition to avoid index error (no more points available to link)
-            if i + 1 >= len(elements_info):
-                alert(f'No more objects to link. {i=}')
-
-            A = elements_info[i]
-            B = elements_info[i + 1]
-
-            # include each other as neighbors 
-            add_neighbour(A, B.id)
-            add_neighbour(B, A.id)
-
-            # read coordinates from cx/cy (strip units)
-            ax = (A.el.get('cx'))
-            ay = (A.el.get('cy'))
-            bx = (B.el.get('cx'))
-            by = (B.el.get('cy'))
-
-            # parse transforms (identity if missing)
-            t_a = inkex.Transform(A.el.get('transform') or '')
-            t_b = inkex.Transform(B.el.get('transform') or '')
-
-            # apply transforms according to option
-            copy_transform = connection_options.copy_transform
-            if copy_transform == 'copy_from_a':
-                start = t_a.apply_to_point((ax, ay))
-                end   = [bx, by]
-            elif copy_transform == 'copy_from_b':
-                start = [ax, ay]
-                end   = t_b.apply_to_point((bx, by))
-            elif copy_transform == 'copy_from_both':
-                start = t_a.apply_to_point((ax, ay))
-                end   = t_b.apply_to_point((bx, by))
-            else:  # no_copy
-                start = [ax, ay]
-                end   = [bx, by]
-
-            # create svg line element
-            line = polygons.PathElement.new(f"M {start[0]},{start[1]} L {end[0]},{end[1]}")
-
-            # keep style simple; users can edit stroke later in Inkscape
-            line.style['stroke'] = connection_options.line_color
-            line.style['stroke-width']= connection_options.lines_stroke
-            line.set('flutter_maps:modified_by_code', 'inkscape_extension')
-            line.set('flutter_maps:a_id', str(A.id))
-            line.set('flutter_maps:b_id', str(B.id))
-            line.set('id', f'nav_line-{line.get("flutter_maps:a_id")}-{line.get("flutter_maps:b_id")}')
-
-            # set z-order 1 level below points z-order
-            if connection_options.draw_lines: 
-                # Check if there is a "points" layer in the document, otherwise create it
-                # Then add the entrance point to that layer that we avoid any transform issues with the current layer
-                query = '//svg:g[@inkscape:groupmode="layer" and @inkscape:label="navigation"]'
-                layers_search_result = self.svg.xpath(query)
-
-                if layers_search_result:
-                    points_layer = layers_search_result[0]
-
-                else:
-                    # Create it if it doesn't exist
-                    points_layer = inkex.Layer.new("navigation")
-                    self.svg.add(points_layer)
-
-                # MOVE the layer to the very bottom of the XML tree (Top Z-index)
-                # Even if it already existed elsewhere, this moves it to the end.
-                self.svg.append(points_layer)
-
-                # Add line to points layer (at the end, so on top of other svg objects but behind points)
-                points_layer.insert(0, line)
-
-        # Update element IDs with neighbors
-        for info in elements_info:
-            # sort neighbors to keep deterministic order (optional)
-            # keep insertion order for closer match to behavior; but uniqueness enforced.
-            neighbors = info.neighbors
-            id_val = self.build_point_id_attr(info.id, neighbors)
-            info.el.set('id', id_val)
-   
+        
+        # connect points: Use normalized information (DTOs List) to connects the svg elements in the lists order
+        self.connect_using_point_info(elements_info=elements_info, connection_options=connection_options)
+        
     def get_displacement_entrance_coordinates(
         self,
         entrance_x: float,
@@ -927,7 +947,6 @@ class FlutterMapExtension(inkex.EffectExtension):
             raise ValueError(f'Unknown separation type: {separation_type}')
 
         return dx, dy
-                   
 
     def add_building(self, building_options: BuildingOptions = BuildingOptions(), sort_mode: str ='no_sort', 
                      sort_direction: str ='asc', entrance_point_options: EntrancePointOptions = EntrancePointOptions()):
@@ -995,7 +1014,7 @@ class FlutterMapExtension(inkex.EffectExtension):
             # if no entrances_ids, means this building has no connection point yet
 
             elem_info.append(self.BuildingInfo(el= element, type= building_type, subtype= building_subtype, 
-                              id= str(building_id), entrance_ids= entrances_ids, entrance_element=None))
+                              id= str(building_id), neighbours= entrances_ids, entrance_element=None))
         
 
 
@@ -1018,7 +1037,7 @@ class FlutterMapExtension(inkex.EffectExtension):
             building_id = building_info.id
             building_subtype = building_info.subtype
             building_type = building_info.type
-            entrances_ids = building_info.entrance_ids
+            entrances_ids = building_info.neighbours
             
             should_create_entrance_point = building_options.add_connection_point
 
@@ -1121,14 +1140,14 @@ class FlutterMapExtension(inkex.EffectExtension):
                 
                 # Add entrance point to the building's neighbours
                 entrances_ids.append(next_point_id)
-                building_info.entrance_ids = entrances_ids
+                building_info.neighbours = entrances_ids
                                     
                 # store the entrance element for later use
                 building_info.entrance_element = entrance_element
                 self.msg(f'Created entrance point {next_point_id} for building {building_id} at ({entrance_x:.2f}, {entrance_y:.2f})')
             
                 # Update building element's ID attribute with entrance relationships
-                entrance_ids = building_info.entrance_ids
+                entrance_ids = building_info.neighbours
                 # Create the ID attribute string in format: 
                 building_id_val = self.build_building_id_attr(
                     building_type=building_type,
@@ -1196,7 +1215,6 @@ class FlutterMapExtension(inkex.EffectExtension):
 
                     # 5. Add to the layer
                     points_layer.add(entrance_element)
-
 
 if __name__ == '__main__':
     try:
