@@ -1,0 +1,152 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<inkscape-extension xmlns="http://www.inkscape.org/namespace/inkscape/extension">
+  <name>Connect Point (Flutter Map widget)</name>
+  <id>org.inkscape.tutorial.flutter_map_extension</id>
+
+  <param name="tab" type="notebook">
+    <page name="Operation Mode" gui-text="Operation Mode Selection">
+      <param name="operation_mode" type="optiongroup" appearance="radio" gui-text="I want to: ">
+        <option value="connect" default="true">CONNECT Selected Points</option>
+        <option value="clean">CLEAN existent connections</option>
+        <option value="add_building">ADD buildings connections</option>
+      </param>
+      <spacer/> <spacer/>
+      <param name="copy_transform" type="optiongroup" appearance="radio" gui-text="Copy tranform:" gui-hidden="operation_mode == 'clean'">
+        <option value="no_copy" >Don't copy transform</option>
+        <option value="copy_from_a">Copy point A transform</option>
+        <option value="copy_from_b">Copy point B transform</option>
+        <option value="copy_from_both">Copy transform from both</option>
+      </param>
+      <spacer/> <spacer/>
+      <param name="clean_lines" type="bool" gui-text="Delete Lines pointing to non-existent points" gui-hidden="operation_mode == 'connect'">true</param>
+    </page>
+    <page name="Options" gui-text="Connection Options">
+      <separator/>
+      <hbox>
+        <vbox>
+          
+            <label appearance="header">Line Drawing Options</label>
+            <param name="draw_lines" type="bool" gui-text="Wheter to draw a line between the connected points" indent="1">true</param>
+            <!-- <hbox> -->
+              <param name="line_stroke_width" type="string" gui-text="Stroke width for the lines" indent="1" >0.1px</param>
+              <param name="line_color" gui-text="Connection Line color" type="color" appearance="colorbutton" indent="1">0xda1a1aff</param>
+            <!-- </hbox> -->
+
+            <separator/>
+            <label appearance="header">Sorting</label>
+
+            <hbox indent="1">
+              <param name="sort_mode" type="optiongroup" appearance="radio" gui-text="Sort points:">
+                <option value="no_sort" default="true">Do not sort</option>
+                <option value="sort_horizontally">Sort horizontally</option>
+                <option value="sort_vertically">Sort vertically</option>
+              </param>
+
+              <param name="sort_direction" type="optiongroup" appearance="radio" gui-text="Sort direction:">
+                <option value="asc" default="true">Ascending</option>
+                <option value="desc">Descending</option>
+              </param>
+            </hbox>
+        </vbox>
+        <separator/> <separator/> <separator/> <separator/>
+        <vbox>
+
+            <label appearance="header">Smart Connect</label>
+            <param name="smart_connect_enabled" type="bool" gui-text="Use smart connect" indent="1"/>
+            <param name="smart_connect_type" type="optiongroup" appearance="combo" gui-text="Smart Connect Algorithm:" indent="1">
+              <option value="nearest_point" default="true">nearest point</option>
+            </param>
+            <separator/>
+            <spacer/> <spacer/>
+            <separator/>
+            <label appearance="header" indent="1">Nearest point connection options</label>
+            <param name="ignore_building_point" type="bool" gui-text="Whether to ignore points that are building-points/entrance-to-buildings" indent="2">true</param>
+            <param name="max_radius" type="string" gui-text="Max connection distance (radius)" gui-description="maximun connection distance measured as search radius from the center of each point" indent="2">0.1px</param>
+
+        </vbox>
+      </hbox>
+    </page>
+    <page name="building_options" gui-text="Building Options">
+      <separator/>
+      <label appearance="header" gui-text="The one to be used on the ID name">Building type</label>
+      <param name="building_type" type="optiongroup" appearance="combo" gui-text="Building type:" indent="1">
+        <option value="shop" default="true">shop</option>
+        <option value="parking" >parkingspace</option>
+        <option value="atmmachine" >atmmachine</option>
+        <option value="toilet-male" >male toilet</option>
+        <option value="toilet-female" >female toilet</option>
+        <option value="toilet-mathernity">mathernity toilet</option>
+        <option value="simple-stais" >simple stairs</option>
+        <option value="fire_escape-stais" >fire escape stairs</option>
+        <option value="escalator-stairs" >escalator stairs</option>
+        <option value="elevator-stairs" >elevator </option>
+        <option value="custom">Custom type (Specified specified on the textbox)</option>
+      </param>
+      <!-- Custom types-->
+      <hbox indent="1">
+        <param name="custom_type" type="string" gui-text="Custom Building type." gui-description="Ignored if any type other than custom was choosen on Building type selector. It will end up looking like '{type}-{id}={relationships}'">warehouse</param>
+        <param name="custom_subtype" type="string" gui-text="Custom object subtype. " gui-description="If not empty id will look like: {type}-{subtype}-{id}={relationships}"></param>
+      </hbox>
+
+      <spacer/>
+      <separator/>
+
+      <label appearance="header" gui-text="Preferences related to connection relationships on the objects. \n Connection will use currently selected connection options">Connection preferences</label>
+      <param name="add_connection_point" type="bool" gui-text="Add connection point (automatically linked)" gui-description="Wheter to add a connection dot/point (will be added on above the building with the next sequential point number)" indent="1"></param>
+      <hbox indent="1">
+      <!-- </hbox> -->
+        <param name="point_radius" type="string" gui-text="Point radius" gui-description="The radius of the points that will be created"></param>
+        <param name="point_fill_color" gui-text="Point fill color" type="color" appearance="colorbutton">0x000000ff</param>
+        <param name="point_stroke" type="string" gui-text="Point stroke" gui-description="The stroke width used in the point"></param>
+        <param name="point_stroke_color" gui-text="Point stroke color" type="color" appearance="colorbutton">0xda1a1aff</param>
+      </hbox>
+      <spacer/>
+      <separator/>
+
+
+      <label appearance="header" >Point/Entrance positioning</label>
+      <hbox indent="1">
+        <param name="building_point_position" type="optiongroup" appearance="combo" gui-text="Point Position">
+          <option value="center-left">Center left</option>
+          <option value="center-right">Center Right</option>
+          <option value="center" default="true">Center</option>
+
+          <option value="upper-left">Upper Left</option>
+          <option value="upper-right">Upper Rigth</option>
+          <option value="upper-center">Upper Center</option>
+
+          <option value="lower-left">Lower left</option>
+          <option value="lower-right">Lower right</option>
+          <option value="lower-center">Lower Center</option>
+        </param>
+
+
+        <param name="point_to_border_separation" type="optiongroup" appearance="combo" gui-description="Distance that the point will displaced from its Point Position (Ignored if center poisitioning was specified)" gui-text="Displacement from the nearest building border">
+          <option value="center-to-center">Point center over border</option>
+          <option value="border-to-border-in">Point border next to Object border (Inside Object)</option>
+          <option value="border-to-boder-out">Point border next to Object border (Outside Object)</option>
+          <option value="10%-to-border-in">10% of object length inside (measured from borders)</option>
+          <option value="10%-to-border-out">10% of object length outside (measured from borders)</option>
+          <option value="custom">Custom</option>
+        </param>
+      </hbox>
+
+      <param name="custom_point_separation" type="string" precision="1" min="0" gui-description="Same as with default displacements, but allowing your custom distances" gui-text="Displacement from the nearest building border in the format {cuantity}{unit/%}-{in/out}-{border/center}" indent="1">10px-in-border</param>
+
+    </page>
+
+    <page name="Help" gui-text="Help">
+      <label> This extension allows you to connect two ellipses via IDs and a line. Intended to be used with the following Flutter Widget:</label> 
+      <label appearance="url"> https://github.com/ADC-Studio/floors_map_widget </label>
+    </page>
+   </param>
+
+  <effect needs-live-preview="true">
+      <effects-menu>
+        <submenu name="Flutter Map Widget"/>
+      </effects-menu>
+  </effect>
+  <script>
+    <command location="inx" interpreter="python">flutter_map_extension.py</command>
+  </script>
+</inkscape-extension>
