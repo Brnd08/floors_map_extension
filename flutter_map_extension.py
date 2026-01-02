@@ -528,58 +528,148 @@ class FlutterMapExtension(inkex.EffectExtension):
         else:
             raise NotImplementedError(f'Operation Mode not implemented: {self.options.operation_mode}')
 
-    def clean_point_connections(self, clean_lines: bool = True):
+
+    from dataclasses import dataclass
+    @dataclass
+    class PointInfo:
+        """ DTO class used to wrap a point's svg element and required info for connection operations """
+        el: inkex.elements.BaseElement
+        id: str
+        neighbours: Union[List[int], List[str]]
+    
+    @dataclass
+    class BuildingInfo:
+        """ DTO class used to wrap a building's svg element and required info for connection operations """
+        el: inkex.elements.BaseElement
+        id: str
+        type: str
+        subtype: Union[str, None]
+        neighbours: Union[List[int], List[str]]
+        entrance_element: Union[inkex.elements.BaseElement, None]
+
+    def clean_point_connections(self, clean_lines: bool = True, delete_malformed: bool = True):
         """
-        Deletes lines connected to points that no longer exist (using numeric IDs),
-        and cleans up neighbors in point IDs.
-        Lines without flutter_maps:a_id/b_id are skipped.
+        Deletes orphaned navigation lines and synchronizes neighbor references
+        in Point and Building IDs using indexed ID lookups.
+
+        Optimized: single initial scan to collect PointInfo and BuildingInfo DTOs,
+        then targeted operations for lines inside the 'navigation' layer by id.
         """
-        # TODO: Add functionality to clean building to point connections as well.
+        # 1. Get all IDs currently in the document to avoid full DOM scans
+        all_elements_by_id = self.svg.get_ids()
 
-        layer = self.svg.get_current_layer()
+        # containers built in the first scan
+        points_by_intid: dict[int, FlutterMapExtension.PointInfo] = {}
+        buildings_by_intid: dict[int, FlutterMapExtension.BuildingInfo] = {}
 
-        # Gather all numeric point IDs from the document
-        # mapps custom id to element
-        valid_ids: Dict[int, tuple[Any, List[int]]]= {}
-        ellipses_in_doc = self.svg.xpath('//svg:ellipse', namespaces=inkex.NSS)
+        # --- First pass: classify everything once and store parsed info ---
+        for id_str in all_elements_by_id:
+            # Attempt Point parse
+            p_id, p_neighbors = self.parse_point_id(id_str)
+            if p_id is not None:
+                # normalize neighbors to ints when possible
+                if p_neighbors:
+                    try:
+                        neighbors_int = [int(n) for n in p_neighbors]
+                    except Exception:
+                        # fallback to raw list if conversion fails
+                        neighbors_int = list(p_neighbors)
+                else:
+                    neighbors_int = []
+                points_by_intid[int(p_id)] = self.PointInfo(
+                    el=self.svg.getElementById(id_str),
+                    id=str(p_id),
+                    neighbours=neighbors_int
+                )
+                continue
 
-        for el in ellipses_in_doc:
-            element_id, neighbors = self.parse_point_id(el.get('id'))
-            if element_id:
-                valid_ids[element_id] = el, neighbors
+            # Attempt Building parse
+            b_type, b_subtype, b_id, b_entrances = self.parse_building_id(id_str)
+            if b_id is not None:
+                if b_entrances:
+                    try:
+                        entrances_int = [int(e) for e in b_entrances]
+                    except Exception:
+                        entrances_int = list(b_entrances)
+                else:
+                    entrances_int = []
+                buildings_by_intid[int(b_id)] = self.BuildingInfo(
+                    el=self.svg.getElementById(id_str),
+                    id=str(b_id),
+                    type=b_type, # type: ignore
+                    subtype=b_subtype,
+                    neighbours=entrances_int,
+                    entrance_element=None
+                )
+                continue
 
-        # breakpoint()
-        # Clean lines
+        # --- Clean Lines (Navigation Paths) ---
         if clean_lines:
-            for line in layer.findall('.//svg:line', namespaces=inkex.NSS):
-                a_id = line.get('flutter_maps:a_id')
-                b_id = line.get('flutter_maps:b_id')
+            # We target the 'navigation' layer specifically for lines
+            nav_layer = self.svg.xpath(
+                '//svg:g[@inkscape:groupmode="layer" and @inkscape:label="navigation"]'
+            )
+            if nav_layer:
+                # expected pattern: nav_line-<A>-<B> where A and B are numeric point ids
+                line_id_re = re.compile(r'^nav_line-(\d+)-(\d+)$')
 
-                # Skip lines that don't have flutter_maps attributes
-                if a_id is None and b_id is None:
-                    continue
+                lines = nav_layer[0].xpath('.//*[starts-with(@id, "nav_line-")]')
+                for line in lines:
+                    line_id = line.get('id') or ""
+                    match = line_id_re.match(line_id)
 
-                # Remove or clean lines that reference non-existent points
-                a_present= int(a_id) in valid_ids if a_id else False
-                b_present= int(b_id) in valid_ids if b_id else False
+                    if not match:
+                        # malformed id → remove
+                        if delete_malformed: 
+                            self.msg(f'\n=> A malformed navigation line ("{line_id}") was found, line will be deleted. You can connect again both points if you would like the extension to draw a new line')
+                            line.getparent().remove(line)
+                        else: 
+                            self.msg(f'\n=> A malformed navigation line ("{line_id}") was found. Line will be ignored')
+                        continue
 
-                if not a_present or not b_present:
-                    # self.msg(f"Removing orphan line connecting A:{a_id} B:{b_id}. Line ID was {line.get('id')}.")
-                    layer.remove(line)
+                    a_id = int(match.group(1))
+                    b_id = int(match.group(2))
 
-        # Clean neighbors in point IDs
-        for custom_id, (el, linked_ids_list) in valid_ids.items():
+                    # Remove line if either endpoint ID is missing
+                    if a_id not in points_by_intid or b_id not in points_by_intid:
+                        line.getparent().remove(line)
+                        self.msg(f'\n=> An orphaned navigation line ("{line_id}") was found, line will be deleted.')
 
-            element_id = el.get('id')
+        # --- Update Point-to-Point neighbor lists (using the stored DTOs) ---
+        for int_id, pinfo in list(points_by_intid.items()):
+            original_neighbors = list(pinfo.neighbours)
+            # keep only neighbors that exist in current document (keys are ints)
+            cleaned_neighbors = [n for n in original_neighbors if int(n) in points_by_intid]
+            if len(cleaned_neighbors) != len(original_neighbors):
+                # build and set new id using existing helper
+                new_id = self.build_point_id_attr(str(int_id), cleaned_neighbors)
+                pinfo.el.set('id', new_id)
+                # also update our DTO to reflect the change (so further ops use updated state)
+                pinfo.id = new_id
+                pinfo.neighbours = cleaned_neighbors # type: ignore
+                self.msg(f'\n=> Cleaned neignhbours for "{pinfo.id}", previous={original_neighbors} new={cleaned_neighbors}')
+                
 
-            # Keep only neighbors that exist
-            cleaned_neighbors = [str(n) for n in linked_ids_list if n in valid_ids]
-            if len(cleaned_neighbors) < len(linked_ids_list):
-                # self.msg(f"Updating neighbors for point ID {element_id}: {neighbors} -> {cleaned_neighbors}")
-                # breakpoint()
-                new_id_attr = self.build_point_id_attr(custom_id, cleaned_neighbors)
-                el.set('id', new_id_attr)
+        # --- Update Building-to-Point entrance lists (using stored DTOs) ---
+        for int_b_id, binfo in list(buildings_by_intid.items()):
+            original_entrances = list(binfo.neighbours)
+            cleaned_entrances = [e for e in original_entrances if int(e) in points_by_intid]
+            if len(cleaned_entrances) != len(original_entrances):
+                # use the stored building type/subtype and helper to build the new id
+                new_building_id = self.build_building_id_attr(
+                    building_type=binfo.type,
+                    building_subtype=binfo.subtype,
+                    id=int(int_b_id),
+                    entrance_ids=cleaned_entrances # type: ignore
+                )
+                binfo.el.set('id', new_building_id)
+                binfo.id = new_building_id
+                binfo.neighbours = cleaned_entrances # type: ignore
+                self.msg(f'\n=> Cleaned entrance point(s) for "{binfo.id}", previous={original_entrances} new={cleaned_entrances}')
 
+        self.msg('\n=> Clean DONE')
+
+    
     document_buildings = None
     unique_entrances_ids = None
 
@@ -602,23 +692,6 @@ class FlutterMapExtension(inkex.EffectExtension):
 
         return False
 
-    from dataclasses import dataclass
-    @dataclass
-    class PointInfo:
-        """ DTO class used to wrap a point's svg element and required info for connection operations """
-        el: inkex.elements.BaseElement
-        id: str
-        neighbours: Union[List[int], List[str]]
-    
-    @dataclass
-    class BuildingInfo:
-        """ DTO class used to wrap a building's svg element and required info for connection operations """
-        el: inkex.elements.BaseElement
-        id: str
-        type: str
-        subtype: Union[str, None]
-        neighbours: Union[List[int], List[str]]
-        entrance_element: Union[inkex.elements.BaseElement, None]
 
     def smart_connect_nearest_point(self, points_to_connect: List[inkex.elements.BaseElement], 
                                     ignore_building_point: bool = True, max_radius: str ="0.1px") -> List[List[inkex.elements.BaseElement]]:
@@ -832,6 +905,8 @@ class FlutterMapExtension(inkex.EffectExtension):
 
                 # Add line to points layer (at the end, so on top of other svg objects but behind points)
                 points_layer.insert(0, line)
+            
+            self.msg(f'\n=> Connected point "{A.el.get("id")}" & "{B.el.get("id")}". Line: "{line.get("id") if connection_options.draw_lines else "No line drawed"}"')
 
     def sequentially_connect_points(self, connection_options: PointConnectionOptions = PointConnectionOptions()):
         """
