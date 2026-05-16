@@ -1091,7 +1091,7 @@ class FlutterMapExtension(inkex.EffectExtension):
         # --------- MAIN LOGIC ---------------------------------------------------
 
         if point_position == building_options.PointPosition.CENTER:  # Center position, no separation adjustment needed
-            return entrance_x, entrance_y
+            return 0,0
 
         if separation_type == building_options.PointToBorderSeparation.BORDER_TO_BORDER_IN:
             dx, dy = border_to_border_in_displacement()
