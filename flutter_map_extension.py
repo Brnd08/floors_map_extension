@@ -23,6 +23,7 @@ Description of this extension
 
 import logging
 import math
+import random
 from typing import Any, Dict, List, Tuple, Union
 import inkex 
 from inkex.units import convert_unit
@@ -119,6 +120,11 @@ class FlutterMapExtension(inkex.EffectExtension):
         """Smart connect algorithms supported by the extension."""
         NEAREST_POINT = 'nearest_point'
 
+    class IDReplacementTypes(DictLikeEnum):
+        """Strategy for replacing an element id"""
+        RANDOM = 'random'
+        
+
 
     class PointConnectionOptions:
 
@@ -213,15 +219,16 @@ class FlutterMapExtension(inkex.EffectExtension):
             value follows the format: '<type>-<subtype>'
             '''
             SHOP = 'shop'
-            PARKING = 'parking'
+            PARKING = 'parkingspace'
             ATM_MACHINE = 'atmmachine'
+            TOILET_UNISEX = 'toilet-unisex'
             TOILET_MALE = 'toilet-male'
             TOILET_FEMALE = 'toilet-female'
             TOILET_MATHERNITY = 'toilet-mathernity'
-            SIMPLE_STAIRS = 'simple-stais'
-            FIRE_ESCAPE_STAIRS = 'fire_escape-stais'
-            ESCALATOR_STAIRS = 'escalator-stairs'
-            ELEVATOR_STAIRS = 'elevator-stairs'
+            SIMPLE_STAIRS = 'stairs-simple'
+            FIRE_ESCAPE_STAIRS = 'stairs-fire_escape'
+            ESCALATOR_STAIRS = 'stairs-escalator'
+            ELEVATOR_STAIRS = 'stairs-elevator'
             CUSTOM = 'custom'
 
         class PointPosition(DictLikeEnum):
@@ -439,22 +446,41 @@ class FlutterMapExtension(inkex.EffectExtension):
     def add_arguments(self, pars):
         pars.add_argument("--tab", choices=["Operation Mode", "Options", "Help", "building_options"])
         # Operation Mode tab
-        pars.add_argument("--operation_mode", choices=["connect", "clean", "add_building"], default="connect")
+        pars.add_argument("--operation_mode", 
+                          choices=["connect", "clean", "add_building", "clean_ids"],
+                          default="connect")
 
-        # Connection options
-        pars.add_argument("--clean_lines", type=inkex.Boolean, default=True)
+        # Connection mode options
         pars.add_argument("--draw_lines", type=inkex.Boolean, default=True)
         pars.add_argument("--line_color", type=inkex.Color, default=inkex.Color('lightblue'))
         pars.add_argument("--line_stroke_width", type=str, default='0.01px')
         pars.add_argument("--copy_transform", choices=['copy_from_a', 'copy_from_b', 'no_copy', 'copy_from_both'], type=str, default='no_copy')
+
+        
+        # global points config
+        pars.add_argument("--considerEllipses", type=inkex.Boolean, default=True)
+        pars.add_argument("--considerCircles", type=inkex.Boolean, default=True)
+        pars.add_argument("--considerPath", type=inkex.Boolean, default=False)
+
+
         # Sorting options
         pars.add_argument("--sort_mode", choices=['no_sort', 'sort_horizontally', 'sort_vertically'], type=str, default='no_sort')
         pars.add_argument("--sort_direction", choices=['asc', 'desc'], type=str, default='asc')
 
+        # Clean connection options
+        pars.add_argument("--clean_lines", type=inkex.Boolean, default=True)
+        pars.add_argument("--delete_malformed", type=inkex.Boolean, default=True)
+
+        # Clean IDs options
+        pars.add_argument("--clean_points", type=inkex.Boolean, default=True)
+        pars.add_argument("--clean_buildings", type=inkex.Boolean, default=False)
+        pars.add_argument("--id_replace_type", choices=['random'], type=str, default='random')
+
+
         # Building type options
-        pars.add_argument("--building_type", choices=['shop', 'parking', 'atmmachine', 'toilet-male', 'toilet-female', 
-                                                    'toilet-mathernity', 'simple-stais', 'fire_escape-stais', 
-                                                    'escalator-stairs', 'elevator-stairs', 'custom'], 
+        pars.add_argument("--building_type", choices=['shop', 'parkingspace', 'atmmachine', 'toilet-unisex', 'toilet-male', 'toilet-female', 
+                                                    'toilet-mathernity', 'stairs-simple', 'stairs-fire_escape', 'stairs'
+                                                    'stairs-escalator', 'stairs-elevator', 'custom'], 
                         type=str, default='shop')
         pars.add_argument("--custom_type", type=str, default='')
         pars.add_argument("--custom_subtype", type=str, default='')
@@ -483,9 +509,29 @@ class FlutterMapExtension(inkex.EffectExtension):
         # Nearest point connection options
         pars.add_argument("--ignore_building_point", type=inkex.Boolean, default=True)
         pars.add_argument("--max_radius", type=str, default="0.1px")
+    
+
+    considerCircles:bool = True
+    considerEllipses:bool = True
+    considerPath:bool = False
+
+    def element_types_for_points(self) -> List[inkex.BaseElement]:
+        list = []
+        if FlutterMapExtension.considerEllipses: 
+            list.append(polygons.Ellipse)
+            list.append(polygons.Circle)
+            list.append(polygons.PathElement)
+        return list
+        
+
 
     def effect(self):
         """ Main entry point of the extension """
+        # global options
+        FlutterMapExtension.considerCircles = self.options.considerCircles
+        FlutterMapExtension.considerPath  = self.options.considerPath
+        FlutterMapExtension.considerEllipses = self.options.considerEllipses
+
         # Determine operation mode
         operation_mode = str(self.options.operation_mode).lower()
 
@@ -507,7 +553,17 @@ class FlutterMapExtension(inkex.EffectExtension):
                 )
         elif operation_mode == 'clean':
             self.clean_point_connections(
-                clean_lines=self.options.clean_lines
+                clean_lines=self.options.clean_lines,
+                delete_malformed=self.options.delete_malformed
+            )
+        elif operation_mode == 'clean_ids':
+            replacement_type = self.IDReplacementTypes.get(self.options.id_replace_type)
+            assert replacement_type is not None, f'Invalid smart connect type: {self.options.smart_connect_type}'
+
+            self.clean_ids(
+                clean_points= self.options.clean_points,
+                clean_buildings= self.options.clean_buildings,
+                replacement_type= replacement_type
             )
         elif operation_mode == 'add_building':
 
@@ -564,41 +620,26 @@ class FlutterMapExtension(inkex.EffectExtension):
 
         # --- First pass: classify everything once and store parsed info ---
         for id_str in all_elements_by_id:
+
             # Attempt Point parse
-            p_id, p_neighbors = self.parse_point_id(id_str)
-            if p_id is not None:
-                # normalize neighbors to ints when possible
-                if p_neighbors:
-                    try:
-                        neighbors_int = [int(n) for n in p_neighbors]
-                    except Exception:
-                        # fallback to raw list if conversion fails
-                        neighbors_int = list(p_neighbors)
-                else:
-                    neighbors_int = []
-                points_by_intid[int(p_id)] = self.PointInfo(
+            point_id, p_neighbors = self._extract_relations_from_point(id_str=id_str)
+            if point_id is not None:
+                # Attempt Point parse
+                points_by_intid[int(point_id)] = self.PointInfo(
                     el=self.svg.getElementById(id_str),
-                    id=str(p_id),
-                    neighbours=neighbors_int
+                    id=str(point_id),
+                    neighbours=p_neighbors 
                 )
                 continue
-
             # Attempt Building parse
-            b_type, b_subtype, b_id, b_entrances = self.parse_building_id(id_str)
-            if b_id is not None:
-                if b_entrances:
-                    try:
-                        entrances_int = [int(e) for e in b_entrances]
-                    except Exception:
-                        entrances_int = list(b_entrances)
-                else:
-                    entrances_int = []
-                buildings_by_intid[int(b_id)] = self.BuildingInfo(
+            building_id, b_neighbors, b_type ,b_subtype = self._extract_relations_from_building(id_str=id_str)
+            if building_id is not None:
+                buildings_by_intid[int(building_id)] = self.BuildingInfo(
                     el=self.svg.getElementById(id_str),
-                    id=str(b_id),
+                    id=str(building_id),
                     type=b_type, # type: ignore
                     subtype=b_subtype,
-                    neighbours=entrances_int,
+                    neighbours=b_neighbors,
                     entrance_element=None
                 )
                 continue
@@ -670,14 +711,135 @@ class FlutterMapExtension(inkex.EffectExtension):
         self.msg('\n=> Clean DONE')
 
     
+    def _extract_relations_from_point(self, id_str: str ):
+
+        p_id, p_neighbors = self.parse_point_id(id_str)
+        neighbors_int_list = [] 
+        if p_id is not None:
+            # normalize neighbors to ints when possible
+            if p_neighbors:
+                try:
+                    neighbors_int_list = [int(n) for n in p_neighbors]
+                except Exception:
+                    # fallback to raw list if conversion fails
+                    neighbors_int_list = list(p_neighbors)
+            else:
+                neighbors_int_list = []
+        
+        return p_id, neighbors_int_list
+                
+    def _extract_relations_from_building(self, id_str: str ):
+        b_type, b_subtype, b_id, b_entrances = self.parse_building_id(id_str)
+        entrances_int = [] 
+        if b_id is not None:
+            if b_entrances:
+                try:
+                    entrances_int = [int(e) for e in b_entrances]
+                except Exception:
+                    entrances_int = list(b_entrances)
+            else:
+                entrances_int = []
+        return b_id, entrances_int, b_type, b_subtype
+
+    def generate_random_id(self, validation_func, prefix: str = '', max_size: int = 13) -> str:
+        import sys
+        valid = False
+        random_id = None
+
+        maxRandInt = 100_000 # should sufice 
+
+        available_chars = max_size - 5
+        assert  available_chars >= len(prefix), 'at least 5 free chars for rand int'
+
+        while not valid or random_id is None: 
+            randDigits = str(random.randint(0, maxRandInt))
+            random_id = prefix + ''.join(random.choice(randDigits) for i in range(available_chars))
+            valid = validation_func(random_id)
+            
+        return random_id
+
+    def clean_ids(self, clean_points: bool = True, clean_buildings: bool = True, replacement_type: IDReplacementTypes = IDReplacementTypes.RANDOM):
+        """
+        Replaces the id of the selected elements that math the poits / building regex (as specified).
+        The new id is guaranteed to be unique to prevent issues on the svg file.
+        The id replacement might be one of: 
+         - random: random string
+        """
+        # 1. Get all IDs currently in the document to avoid full DOM scans
+        all_elements_by_id = self.svg.get_ids()
+
+        # containers built in the first scan
+        points_by_intid: List[FlutterMapExtension.PointInfo] = []
+        buildings_by_intid: List[FlutterMapExtension.BuildingInfo] = []
+
+
+        selected_elements: selected.ElementList = self.svg.selected
+        # --- First pass: classify everything once and store parsed info ---
+        for element in selected_elements:
+            id_str = element.get('id')
+
+            if clean_points:
+                point_id, p_neighbors = self._extract_relations_from_point(id_str=id_str)
+                if point_id is not None:
+                    # Attempt Point parse
+                    points_by_intid.append( self.PointInfo(
+                        el=self.svg.getElementById(id_str),
+                        id=str(point_id),
+                        neighbours=p_neighbors 
+                    ))
+                    continue
+            
+            if clean_buildings:
+                # Attempt Building parse
+                building_id, b_neighbors, b_type, b_subtype = self._extract_relations_from_building(id_str=id_str)
+                if building_id is not None:
+
+                    buildings_by_intid.append(self.BuildingInfo(
+                        el=self.svg.getElementById(id_str),
+                        id=str(building_id),
+                        type=b_type, # type: ignore
+                        subtype=b_subtype,
+                        neighbours=b_neighbors,
+                        entrance_element=None
+                    ))
+                    continue
+        
+        isUniqueIdPredicate = lambda idStr: idStr not in all_elements_by_id
+        # Clean points
+        if clean_points: 
+            self.msg('\n=> Cleaning points')
+            for pointInfo in points_by_intid:
+                xml_element:inkex.elements.BaseElement = pointInfo.el
+                new_id = self.generate_random_id(isUniqueIdPredicate, prefix='p')
+                self.msg(f'\n=> Clean point element. Old id: {xml_element.get("id")}, new id: {new_id}')
+                xml_element.set('id',new_id)
+                xml_element.set('inkscape:label',new_id)
+
+
+        if clean_buildings: 
+            self.msg('\n=> Cleaning buildings')
+            for buildingInfo in buildings_by_intid:
+                xml_element:inkex.elements.BaseElement = buildingInfo.el
+                new_id = self.generate_random_id(isUniqueIdPredicate, prefix='b')
+                self.msg(f'\n=> Clean building element. Old id: {xml_element.get("id")}, new id: {new_id}')
+                xml_element.set('id',new_id)
+                xml_element.set('inkscape:label',new_id)
+    
     document_buildings = None
     unique_entrances_ids = None
 
     def is_building_point(self, element) -> bool:
+        """
+        Checks whether an element is a building (not points count as no element)
+        """
+        
         id_attr = element.get('id')
         assert id_attr is not None, "Element has no ID attribute"
         
         point_id = self.get_point_id_number(id_attr)
+        if point_id is None: 
+            return False
+
         assert point_id is not None, f"Point ID could not be extracted from element ID: {id_attr}"
 
         if self.document_buildings is None:
@@ -720,7 +882,9 @@ class FlutterMapExtension(inkex.EffectExtension):
         sequences_of_points_to_connect: List[List[inkex.elements.BaseElement]] = []
 
         # exclude the points linked to buildings from the points available to connect
-        available_points_to_connect = [p for p in points_to_connect if not self.is_building_point(p)] if ignore_building_point else points_to_connect
+        available_points_to_connect = \
+            [ p for p in points_to_connect if not self.is_building_point(p)] if ignore_building_point \
+            else points_to_connect
 
         # Iterate over each point to connect and add it to the list of pairs to connect along with the nearest point (if any)
         for point in (points_to_connect):
@@ -751,7 +915,10 @@ class FlutterMapExtension(inkex.EffectExtension):
             raise inkex.AbortExtension("No selection: Need to select at least 2 objects")
 
         # NOTE: selected_elements holds the elements in the user selection order
-        selected_ellipses: List = list(selected_elements.filter(polygons.Ellipse)) + list(selected_elements.filter(polygons.Circle))
+
+        valid_elements= tuple(self.element_types_for_points())
+        selected_ellipses: List = list(selected_elements.filter(valid_elements))
+            
 
         if len(selected_ellipses) < 2:
             raise inkex.AbortExtension( f"Not enough ellipses selected. Need at least 2, got {len(selected_ellipses)}.")
@@ -850,11 +1017,14 @@ class FlutterMapExtension(inkex.EffectExtension):
                              ' line drawing will be skipped. You can delete such line and connect again both points if you would like the extension to draw a new line')
                     continue
 
-                # read coordinates from cx/cy (strip units)
-                ax = (A.el.get('cx'))
-                ay = (A.el.get('cy'))
-                bx = (B.el.get('cx'))
-                by = (B.el.get('cy'))
+                # read coordinates from cx/cy (strip units), fallback to bounding box calculation
+                get_center = lambda el: (
+                    float(cx if (cx := el.get('cx')) else el.bounding_box().center.x),
+                    float(cy if (cy := el.get('cy')) else el.bounding_box().center.y)
+                )
+
+                ax, ay = get_center(A.el)
+                bx, by = get_center(B.el)
 
                 # parse transforms (identity if missing)
                 t_a = inkex.Transform(A.el.get('transform') or '')
@@ -920,7 +1090,9 @@ class FlutterMapExtension(inkex.EffectExtension):
 
         # Input Filtering: ellipses and circles only (elipse for connection points and circles for entrances)
         # NOTE: selected_elements holds the elements in the user selection order
-        selected_ellipses: List = list(selected_elements.filter(polygons.Ellipse)) + list(selected_elements.filter(polygons.Circle))
+
+        valid_elements= tuple(self.element_types_for_points())
+        selected_ellipses: List = list(selected_elements.filter(valid_elements))
 
         # Input Validation: at least 2 selected ellipses / circles (remaining elements after filtering)
         if len(selected_ellipses) < 2:

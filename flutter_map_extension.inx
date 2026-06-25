@@ -8,11 +8,21 @@
       <param name="operation_mode" type="optiongroup" appearance="radio" gui-text="I want to: ">
         <option value="connect" default="true">CONNECT Selected Points</option>
         <option value="clean">CLEAN existent connections</option>
+        <option value="clean_ids">CLEAN IDs</option>
         <option value="add_building">ADD buildings connections</option>
       </param>
       <spacer/> <spacer/>
-      <param name="clean_lines" type="bool" gui-text="Delete Lines pointing to non-existent points" gui-hidden="operation_mode == 'connect'">true</param>
+      <separator/>
+      <label appearance="header">Global</label>
+        <label indent="1" >Points</label>
+
+          <label indent="2" >Elements considered for point-related operations:</label>
+            <param name="considerEllipses" type="bool" gui-text="Consider Ellipses" indent="3">true</param>
+            <param name="considerCircles" type="bool" gui-text="Consider Circles" indent="3">true</param>
+            <param name="considerPath" type="bool" gui-text="Consider Ellipses Path (use with caution)" indent="3">true</param>
+
     </page>
+
     <page name="Options" gui-text="Connection Options">
       <separator/>
       <hbox>
@@ -68,20 +78,50 @@
         </vbox>
       </hbox>
     </page>
+
+    <page name="Options" gui-text="Cleaning Options">
+      <separator/>
+      <hbox>
+        <vbox>
+            <label appearance="header">Clean connection options</label>
+            <param name="clean_lines" type="bool" gui-text="Delete Lines pointing to non-existent points" gui-hidden="operation_mode == 'connect'">true</param>
+            <param name="delete_malformed" type="bool" gui-text="Delete lines with malformed ids" gui-hidden="operation_mode == 'connect'">true</param>
+        </vbox>
+        <separator/> <separator/> <separator/> <separator/>
+        <vbox>
+
+            <label appearance="header">Clean IDs options</label>
+
+            <param name="clean_points" type="bool" gui-text="Clean point ids" indent="1"/>
+            <param name="clean_buildings" type="bool" gui-text="Clean building ids" indent="1"/>
+            <param name="id_replace_type" type="optiongroup" appearance="combo" gui-text="ID replacement type:" indent="1">
+              <option value="random" default="true">random id</option>
+            </param>
+            <separator/>
+            <spacer/> <spacer/>
+            <separator/>
+            <!-- <label appearance="header" indent="1">Nearest point connection options</label>
+            <param name="ignore_building_point" type="bool" guid-description="Whether to ignore points that are building-points/entrance-to-buildings" gui-text="Ignore building points" indent="2">true</param>
+            <param name="max_radius" type="string" gui-text="Max connection distance (radius)" gui-description="maximun connection distance measured as search radius from the center of each point" indent="2">0.1px</param> -->
+
+        </vbox>
+      </hbox>
+    </page>
     <page name="building_options" gui-text="Building Options">
       <separator/>
       <label appearance="header" gui-text="The one to be used on the ID name">Building type</label>
       <param name="building_type" type="optiongroup" appearance="combo" gui-text="Building type:" indent="1">
         <option value="shop" default="true">shop</option>
-        <option value="parking" >parkingspace</option>
+        <option value="parkingspace" >parkingspace</option>
         <option value="atmmachine" >atmmachine</option>
+        <option value="toilet-unisex">Unisex toilet </option>
         <option value="toilet-male" >male toilet</option>
         <option value="toilet-female" >female toilet</option>
         <option value="toilet-mathernity">mathernity toilet</option>
-        <option value="simple-stais" >simple stairs</option>
-        <option value="fire_escape-stais" >fire escape stairs</option>
-        <option value="escalator-stairs" >escalator stairs</option>
-        <option value="elevator-stairs" >elevator </option>
+        <option value="stairs-simple">simple stairs</option>
+        <option value="stairs-fire_escape">fire escape stairs</option>
+        <option value="stairs-escalator">escalator stairs</option>
+        <option value="stairs-elevator">elevator </option>
         <option value="custom">Custom type (Specified specified on the textbox)</option>
       </param>
       <!-- Custom types-->
@@ -138,8 +178,18 @@
     </page>
 
     <page name="Help" gui-text="Help">
-      <label> This extension allows you to connect two ellipses via IDs and a line. Intended to be used with the following Flutter Widget:</label> 
-      <label appearance="url"> https://github.com/ADC-Studio/floors_map_widget </label>
+      <spacer/>
+      <separator/>
+      <label appearance="header" >About</label>
+      <label>This extension foster the creation of floor svg maps compatible with Floors Map Widget for flutter</label> 
+      <label>Visit the repo for more info: </label> 
+      <label indent="2"  appearance="url"> https://github.com/ADC-Studio/floors_map_widget </label>
+      <spacer/>
+      <separator/>
+      <label appearance="header" >Contribute</label>
+      <label>Help us improve this extension by submiting issues and contributing to the codebase.</label> 
+      <label>This extension repo: </label> 
+      <label indent="2"  appearance="url"> https://github.com/Brnd08/floors_map_extension</label>
     </page>
    </param>
 
