@@ -87,6 +87,20 @@ class FlutterMapExtension(inkex.EffectExtension):
         return int(matches.group(3))
     
     @classmethod
+    def is_element_a_point(cls, id_attr: str) -> bool:
+        """
+        Extracts the numeric ID from a point ID attribute."""
+        matches = cls.POINT_ID_REGEX.match(id_attr)
+        return matches is not None
+
+    @classmethod
+    def is_element_a_building(cls, id_attr: str) -> bool:
+        """
+        Extracts the numeric ID from a point ID attribute."""
+        matches = cls.BUILDING_ID_REGEX.match(id_attr)
+        return matches is not None
+
+    @classmethod
     def get_point_id_number(cls, id_attr: str) -> Union[int, None]:
         """
         Extracts the numeric ID from a point ID attribute."""
@@ -508,6 +522,7 @@ class FlutterMapExtension(inkex.EffectExtension):
         
         # Nearest point connection options
         pars.add_argument("--ignore_building_point", type=inkex.Boolean, default=True)
+        pars.add_argument("--filter_non_points", type=inkex.Boolean, default=True)
         pars.add_argument("--max_radius", type=str, default="0.1px")
     
 
@@ -515,11 +530,13 @@ class FlutterMapExtension(inkex.EffectExtension):
     considerEllipses:bool = True
     considerPath:bool = False
 
-    def element_types_for_points(self) -> List[inkex.BaseElement]:
+    def element_types_for_points(self) -> List[Type[inkex.BaseElement]]:
         list = []
         if FlutterMapExtension.considerEllipses: 
             list.append(polygons.Ellipse)
+        if FlutterMapExtension.considerCircles: 
             list.append(polygons.Circle)
+        if FlutterMapExtension.considerPath: 
             list.append(polygons.PathElement)
         return list
         
@@ -545,6 +562,7 @@ class FlutterMapExtension(inkex.EffectExtension):
                     smart_connect_type= smart_connect_type,
                     connection_options= FlutterMapExtension.PointConnectionOptions.from_extension_options(self.options),
                     ignore_building_point= self.options.ignore_building_point,
+                    filter_non_points=self.options.filter_non_points,
                     max_radius= self.options.max_radius
                 )
             else: 
@@ -906,8 +924,22 @@ class FlutterMapExtension(inkex.EffectExtension):
         
         return sequences_of_points_to_connect
 
+    def filter_non_valid_points(self, elements: selected.ElementList, valid_element_classes: tuple, filter_non_points:bool = True) -> selected.ElementList:
+        # Firstly filter by class
+        filtered_elements = elements.filter(valid_element_classes)
+        
+        # Filter element which id does not match point definitions
+        matched_ids = [el.eid for el in filtered_elements if FlutterMapExtension.is_element_a_point(el.eid)] if filter_non_points else [el.eid for el in filtered_elements]
 
-    def smart_connect_points(self, smart_connect_type: SmartConnectTypes, connection_options: PointConnectionOptions = PointConnectionOptions(), **connection_params):
+        # Create a clean, empty ElementList instance linked to the current SVG
+        result_list = inkex.elements._selected.ElementList(self.svg)
+        
+        # Populate it using the built-in .set() method
+        result_list.set(*matched_ids)
+
+        return result_list
+
+    def smart_connect_points(self, smart_connect_type: SmartConnectTypes, connection_options: PointConnectionOptions = PointConnectionOptions(), filter_non_points: bool = True ,**connection_params):
         """ Smart connect points using specified algorithm """
         # Validate and filter inputs: At least two ellipses / circles to connect
         selected_elements: selected.ElementList = self.svg.selected
@@ -915,9 +947,9 @@ class FlutterMapExtension(inkex.EffectExtension):
             raise inkex.AbortExtension("No selection: Need to select at least 2 objects")
 
         # NOTE: selected_elements holds the elements in the user selection order
+        valid_elements = tuple(self.element_types_for_points())
 
-        valid_elements= tuple(self.element_types_for_points())
-        selected_ellipses: List = list(selected_elements.filter(valid_elements))
+        selected_ellipses: List = list( self.filter_non_valid_points(selected_elements, valid_elements, filter_non_points) )
             
 
         if len(selected_ellipses) < 2:

@@ -73,6 +73,7 @@
             <separator/>
             <label appearance="header" indent="1">Nearest point connection options</label>
             <param name="ignore_building_point" type="bool" guid-description="Whether to ignore points that are building-points/entrance-to-buildings" gui-text="Ignore building points" indent="2">true</param>
+            <param name="filter_non_points" type="bool" guid-description="If true will filter selected element so that only elements already defined as points will be connected (useful when connecting only already created points)" gui-text="Exclude non-point elements" indent="2">true</param>
             <param name="max_radius" type="string" gui-text="Max connection distance (radius)" gui-description="maximun connection distance measured as search radius from the center of each point" indent="2">0.1px</param>
 
         </vbox>
